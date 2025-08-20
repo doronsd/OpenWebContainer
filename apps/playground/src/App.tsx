@@ -10,7 +10,7 @@ import { FolderOpen, Terminal as TerminalIcon, Code, Loader2, Save } from "lucid
 import { useShell } from "./hooks/useShell";
 
 export default function App() {
-	const { ready: containerReady, container,servers } = useContainer();
+	const { ready: containerReady, container, servers } = useContainer();
 	const {
 		ready: shellReady,
 		output,
@@ -20,8 +20,7 @@ export default function App() {
 		osc: true,
 	});
 
-
-	const fileTree = useFileTree(containerReady,container); 
+	const fileTree = useFileTree(containerReady, container);
 	const [currentFile, setCurrentFile] = useState("");
 	const [fileContent, setFileContent] = useState("");
 	const [isDirty, setIsDirty] = useState(false);
@@ -74,10 +73,28 @@ export default function App() {
 
 	useEffect(() => {
 		if (container) {
-			container.writeFile("/module.js", 'export const name = "Module"');
-			container.writeFile("/index.js", 'import { name } from "./module.js"; console.log(name);');
+			container.writeFile(
+				"/server.js",
+				`
+const http = require('http');
+
+const server = http.createServer((req, res) => {
+    res.writeHead(200, {'Content-Type': 'text/plain'});
+    res.end('Hello World!');
+});
+
+const PORT = 3000;
+server.listen(PORT, () => {
+    console.log(\`Server running at http://localhost:\${PORT}/\`);
+});`
+			);
 		}
 	}, [container]);
+	useEffect(() => {
+		if (servers) {
+			console.log(servers);
+		}
+	}, [servers]);
 
 	const handleSelectFile = async (path: string) => {
 		// Prompt to save if there are unsaved changes
@@ -87,12 +104,12 @@ export default function App() {
 				handleSave();
 			}
 		}
-		if(!container){
+		if (!container) {
 			return;
 		}
 
 		setCurrentFile(path);
-		const content = await container.readFile(path) || "";
+		const content = (await container.readFile(path)) || "";
 		setFileContent(content);
 		setCurrentEditorContent(content);
 		setIsDirty(false);
@@ -139,7 +156,6 @@ export default function App() {
 					<Code className="h-5 w-5 text-blue-400" />
 					<h1 className="text-white font-semibold">Web IDE</h1>
 					<span className="text-white font-semibold">running servers: {servers.length}</span>
-					
 				</div>
 				<div className="flex space-x-4">
 					{/* Standard menu */}
