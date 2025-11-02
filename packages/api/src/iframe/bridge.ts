@@ -35,7 +35,8 @@ export class IframeBridge {
         // Create and configure iframe
         this.iframe = document.createElement('iframe');
         this.setupIframe(options.styles);
-        this.injectInterceptor();
+        
+        // Don't inject interceptor here - will inject in navigate() when iframe is ready
 
         // Set up message handling
         this.setupMessageHandling();
@@ -58,6 +59,20 @@ export class IframeBridge {
     }
 
     private injectInterceptor() {
+        // Wait for iframe to be ready
+        if (!this.iframe.contentDocument) {
+            console.error('[IframeBridge] contentDocument is null, cannot inject interceptor');
+            return;
+        }
+
+        const doc = this.iframe.contentDocument;
+        
+        // Ensure head exists
+        if (!doc.head) {
+            console.error('[IframeBridge] iframe head is null');
+            return;
+        }
+
         // Create the interceptor script
         const interceptorScript = `
 // Store original fetch and XHR
@@ -151,7 +166,7 @@ window.XMLHttpRequest = function() {
                 ...requestData,
                 body,
                 headers: Object.fromEntries(
-                    Array.from(xhr.getAllResponseHeaders().split('\r\n'))
+                    Array.from(xhr.getAllResponseHeaders().split('\\r\\n'))
                         .filter(Boolean)
                         .map(line => line.split(': '))
                 )
@@ -207,12 +222,14 @@ document.addEventListener('submit', function(event) {
 });
         `;
 
-        // Inject the script into iframe
-        const doc = this.iframe.contentDocument;
-        if (doc) {
+        try {
+            // Inject the script into iframe
             const script = doc.createElement('script');
             script.textContent = interceptorScript;
             doc.head.appendChild(script);
+            console.log('[IframeBridge] Interceptor injected successfully');
+        } catch (error) {
+            console.error('[IframeBridge] Failed to inject interceptor:', error);
         }
     }
 
@@ -276,24 +293,36 @@ document.addEventListener('submit', function(event) {
     async navigate(path: string) {
         const url = `http://localhost:${this.port}${path}`;
 
+        console.log('[IframeBridge] navigate called', { path, url });
+
         try {
+            console.log('[IframeBridge] calling onRequest');
             const response = await this.onRequest({
                 method:'GET',
                 url,
             }
             );
 
+            console.log('[IframeBridge] got response', { status: response.status, statusText: response.statusText });
             const html = await response.text();
+            console.log('[IframeBridge] HTML length:', html.length, 'first 200 chars:', html.substring(0, 200));
 
             // Write HTML to iframe
             const doc = this.iframe.contentDocument;
             if (doc) {
+                console.log('[IframeBridge] writing HTML to iframe');
                 doc.open();
                 doc.write(html);
                 doc.close();
+                console.log('[IframeBridge] HTML written successfully');
+                
+                // Inject interceptor after HTML is written
+                this.injectInterceptor();
+            } else {
+                console.error('[IframeBridge] contentDocument is null!');
             }
         } catch (error) {
-            console.error('Navigation failed:', error);
+            console.error('[IframeBridge] Navigation failed:', error);
         }
     }
 

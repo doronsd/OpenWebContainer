@@ -194,15 +194,23 @@ export class NetworkManager {
     }
 
     async handleRequest(request: HostRequest, port: number): Promise<Response> {
+        console.log('[NetworkManager] handleRequest called', { port, method: request.method, url: request.url });
+        
         const server = this.getServer(port, 'http');
         if (!server || server.status !== 'running') {
+            console.log('[NetworkManager] Server not found or not running');
             return new Response('Service Unavailable', { status: 503 });
         }
 
+        console.log('[NetworkManager] Server found', { pid: server.pid, status: server.status });
+
         const process = this.getProcess(server.pid);
         if (!process || !(process instanceof NodeProcess)) {
+            console.log('[NetworkManager] Process not found or not NodeProcess');
             return new Response('Internal Server Error', { status: 500 });
         }
+        
+        console.log('[NetworkManager] Process found, calling handleHttpRequest');
         if(!request.url){
             request.url=request.path||"/"
         }
@@ -238,6 +246,8 @@ export class NetworkManager {
                 headers: request.headers,
                 body: request.body
             });
+
+            console.log('[NetworkManager] Got response from process', { status: response.status });
 
 
             //// network statistics start

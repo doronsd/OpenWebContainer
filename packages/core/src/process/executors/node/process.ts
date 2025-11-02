@@ -13,6 +13,7 @@ export class NodeProcess extends Process {
     private fileSystem: IFileSystem;
     private networkManager: NetworkManager;
     private httpModule: QuickJSHandle|undefined;
+    private httpModuleInstance: HTTPModule|undefined;  // Add this to store the actual HTTPModule instance
     private networkModule: NetworkModule|undefined; 
     private context: QuickJSContext|undefined;
     constructor(
@@ -153,16 +154,53 @@ export class NodeProcess extends Process {
                     throw context.dump(result.error);
                 }
                 result.value.dispose();
-                this._exitCode = 0;
-                this._state = ProcessState.COMPLETED;
+                
+                // Wait for next microtask to allow server registrations to complete
+                await Promise.resolve();
+                
+                // Check if there are any servers running - if so, keep process alive
+                const servers = this.networkManager.listServers();
+                console.log('[NodeProcess] Checking servers for PID', this.pid, 'servers:', servers.map(s => ({ pid: s.pid, port: s.port })));
+                const hasServers = servers.some(s => s.pid === this.pid);
+                console.log('[NodeProcess] hasServers:', hasServers);
+                
+                if (hasServers) {
+                    // Keep process running for servers - don't exit yet
+                    // Process will be terminated explicitly when servers are closed
+                    console.log('[NodeProcess] Keeping process alive - server running on port', servers.find(s => s.pid === this.pid)?.port);
+                    this._state = ProcessState.RUNNING;
+                    
+                    // Wait indefinitely for server to close
+                    // This keeps the execute() function from returning
+                    await new Promise<void>((resolve) => {
+                        // Store the resolve function so we can call it when server closes
+                        (this as any)._serverCloseResolver = resolve;
+                    });
+                    
+                    // When we get here, server was closed
+                    this._exitCode = 0;
+                    this._state = ProcessState.COMPLETED;
+                } else {
+                    this._exitCode = 0;
+                    this._state = ProcessState.COMPLETED;
+                }
             } catch (error) {
                 this._exitCode = 1;
                 this._state = ProcessState.FAILED;
                 this.emit(ProcessEvent.MESSAGE, { stderr: JSON.stringify(error, null, 2) });
             } finally {
-                context.dispose();
-                // runtime.;
-                this.emit(ProcessEvent.EXIT, { pid: this.pid, exitCode: this._exitCode });
+                // Only cleanup if process is not kept alive for servers
+                const servers = this.networkManager.listServers();
+                const hasServers = servers.some(s => s.pid === this.pid);
+                console.log('[NodeProcess:finally] Checking servers again, hasServers:', hasServers, 'servers:', servers.map(s => ({ pid: s.pid, port: s.port })));
+                
+                if (!hasServers) {
+                    console.log('[NodeProcess:finally] No servers, disposing and emitting EXIT');
+                    context.dispose();
+                    this.emit(ProcessEvent.EXIT, { pid: this.pid, exitCode: this._exitCode });
+                } else {
+                    console.log('[NodeProcess:finally] Has servers, NOT disposing or emitting EXIT');
+                }
             }
         } catch (error: any) {
             this._state = ProcessState.FAILED;
@@ -240,94 +278,30 @@ export class NodeProcess extends Process {
     }
 
     async handleHttpRequest(request: HostRequest): Promise<Response> {
-        return new Promise((resolve, reject) => {
-            try {
-                if (this.httpModule === undefined) {
-                    reject (new Error('HTTP module not initialized'));
-                    return
-                }
-                if (this.context == undefined) {
-                    reject(new Error("No context found") )
-                    return
-                }
-                let reqObj = NetworkModule.hostRequestToHandle(this.context, {
-                    port: request.port,
-                    path: request.path,
-                    method: request.method,
-                    headers: request.headers,
-                    body: request.body
-                })
+        console.log('[NodeProcess] handleHttpRequest called', { pid: this.pid, port: request.port, method: request.method, url: request.url });
+        
+        if (!this.networkModule) {
+            console.error('[NodeProcess] Network module not initialized');
+            return new Response('Network module not initialized', { status: 500 });
+        }
 
-                const callbackHandle = this.context.newFunction("callback", (resHandle) => {
-                    try {
-                        if(this.context==undefined){
-                            reject(new Error("No context found"))
-                            return
-                        }
-                        // log('Response received, setting up event handlers')
-                        let responseData = ''
-                        let resObj = resHandle.dup()
-                        const onHandle = this.context.getProp(resObj, "on")
+        if (!this.context) {
+            console.error('[NodeProcess] Context not initialized');
+            return new Response('Context not initialized', { status: 500 });
+        }
 
-                        const dataListenerHandle = this.context.newFunction("dataListener", (chunkHandle) => {
-                            const chunk = this.context?.getString(chunkHandle)
-                            // log('Received data chunk', { length: chunk.length })
-                            responseData += chunk
-                        })
-
-                        const endListenerHandle = this.context.newFunction("endListener", () => {
-                            if (this.context == undefined) {
-                                reject(new Error("No context found"))
-                                return
-                            }
-                            // log('Response complete', { responseLength: responseData.length })
-                            let resObjDup = resObj.dup()
-                            let res=this.context.dump(resObjDup)
-                            resolve(new Response(responseData, {
-                                status: res.status,
-                                statusText: statusCodeToStatusText(res.status),
-                                headers: res.headers,
-                            }))
-                            dataListenerHandle?.dispose()
-                            endListenerHandle?.dispose()
-                        })
-
-                        let resObjDataDup = resObj.dup()
-                        this.context.callFunction(onHandle, resObjDataDup, [
-                            this.context.newString("data"),
-                            dataListenerHandle
-                        ])
-
-                        let resObjEndDup = resObj.dup()
-                        this.context.callFunction(onHandle, resObjEndDup, [
-                            this.context.newString("end"),
-                            endListenerHandle
-                        ])
-
-                        onHandle.dispose()
-                    } catch (error) {
-                        // log('Error in response callback', error)
-                        reject(error)
-                    }
-                })
-
-                // log('Initiating request')
-                const httpHandle = this.context.getProp(this.context.global, "http")
-                const requestHandle = this.context.getProp(httpHandle, "request")
-
-                this.context.callFunction(requestHandle, this.context.undefined, [reqObj, callbackHandle])
-
-                // Cleanup handles
-                requestHandle.dispose()
-                httpHandle.dispose()
-                callbackHandle.dispose()
-                reqObj.dispose()
-
-            } catch (error) {
-                // log('Error making request', error)
-                reject(error)
-            }
-        })
+        try {
+            console.log('[NodeProcess] Calling networkModule.handleHttpRequest');
+            
+            // Call the server's request handler directly through networkModule
+            const response = this.networkModule.handleHttpRequest(request);
+            console.log('[NodeProcess] Got response from networkModule', { status: response.status });
+            
+            return response;
+        } catch (error: any) {
+            console.error('[NodeProcess] Error handling HTTP request:', error);
+            return new Response(`Internal Server Error: ${error.message}`, { status: 500 });
+        }
     }
 
     async terminate(): Promise<void> {

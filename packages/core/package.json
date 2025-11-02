@@ -7,7 +7,7 @@
 	"types": "./dist/index.d.ts",
 	"scripts": {
 		"compile": "tsc --project tsconfig.json",
-		"build:worker": "mkdir -p src/generated && BUILD_TARGET=worker tsup",
+		"build:worker": "node ./scripts/build-worker.cjs",
 		"build:main": "tsup",
 		"build": "pnpm build:worker && pnpm build:main",
 		"clean": "rimraf dist",

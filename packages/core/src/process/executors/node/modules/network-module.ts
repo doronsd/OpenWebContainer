@@ -580,6 +580,118 @@ export class NetworkModule {
         }
     }
 
+    /**
+     * Handle an HTTP request by routing it to the appropriate server handler
+     */
+    handleHttpRequest(request: HostRequest): Response {
+        const port = request.port || 80;
+        const host = request.hostname || 'localhost';
+        const serverKey = `${host}:${port}`;
+
+        console.log('[NetworkModule] handleHttpRequest called', { serverKey, method: request.method, url: request.url });
+
+        const server = this.servers.get(serverKey);
+        if (!server || !server.requestHandler) {
+            console.error('[NetworkModule] No server found or no request handler');
+            return new Response(`No server listening on ${serverKey}`, { status: 404 });
+        }
+
+        try {
+            console.log('[NetworkModule] Creating request/response handles in QuickJS');
+            
+            // Create request object handle
+            const path = request.path || request.url || '/';
+            const method = request.method || 'GET';
+            const headers = request.headers || {};
+            const body = request.body;
+
+            // Create IncomingMessage (request) handle
+            const reqObj = this.context.newObject();
+            this.context.setProp(reqObj, 'url', this.context.newString(path));
+            this.context.setProp(reqObj, 'method', this.context.newString(method));
+            
+            const headersObj = this.context.newObject();
+            for (const [key, value] of Object.entries(headers)) {
+                this.context.setProp(headersObj, key.toLowerCase(), this.context.newString(value));
+            }
+            this.context.setProp(reqObj, 'headers', headersObj);
+            headersObj.dispose();
+
+            if (body) {
+                this.context.setProp(reqObj, 'body', this.context.newString(body));
+            }
+
+            // Create ServerResponse (response) handle
+            const resObj = this.context.newObject();
+            let responseData = '';
+            let statusCode = 200;
+            const responseHeaders: Record<string, string> = {};
+
+            // Implement res.writeHead
+            const writeHeadFn = this.context.newFunction('writeHead', (statusHandle, headersHandle) => {
+                statusCode = this.context.getNumber(statusHandle);
+                if (headersHandle && headersHandle !== this.context.undefined) {
+                    const headers = this.context.dump(headersHandle);
+                    Object.assign(responseHeaders, headers);
+                }
+                return this.context.undefined;
+            });
+            this.context.setProp(resObj, 'writeHead', writeHeadFn);
+
+            // Implement res.setHeader
+            const setHeaderFn = this.context.newFunction('setHeader', (nameHandle, valueHandle) => {
+                const name = this.context.getString(nameHandle);
+                const value = this.context.getString(valueHandle);
+                responseHeaders[name.toLowerCase()] = value;
+                return this.context.undefined;
+            });
+            this.context.setProp(resObj, 'setHeader', setHeaderFn);
+
+            // Implement res.write
+            const writeFn = this.context.newFunction('write', (dataHandle) => {
+                const data = this.context.getString(dataHandle);
+                responseData += data;
+                return this.context.undefined;
+            });
+            this.context.setProp(resObj, 'write', writeFn);
+
+            // Implement res.end
+            const endFn = this.context.newFunction('end', (dataHandle) => {
+                if (dataHandle && dataHandle !== this.context.undefined) {
+                    const data = this.context.getString(dataHandle);
+                    responseData += data;
+                }
+                return this.context.undefined;
+            });
+            this.context.setProp(resObj, 'end', endFn);
+
+            // Call the request handler
+            console.log('[NetworkModule] Calling server request handler');
+            server.requestHandler(reqObj, resObj);
+
+            console.log('[NetworkModule] Request handler completed');
+
+            // Clean up handles AFTER requestHandler completes
+            writeHeadFn.dispose();
+            setHeaderFn.dispose();
+            writeFn.dispose();
+            endFn.dispose();
+            reqObj.dispose();
+            resObj.dispose();
+
+            console.log('[NetworkModule] Returning response', { statusCode, bodyLength: responseData.length });
+
+            return new Response(responseData, {
+                status: statusCode,
+                headers: responseHeaders
+            });
+
+        } catch (error: any) {
+            console.error('[NetworkModule] Error handling request:', error);
+            return new Response(`Internal Server Error: ${error.message}`, { status: 500 });
+        }
+    }
+
     dispose() {
         this.log('dispose', 'Disposing network system')
         this.servers.clear()
@@ -744,3 +856,4 @@ export const  statusCodeToStatusText = (statusCode: number) => {
         default: return 'Unknown Status Code';
     }
 }
+

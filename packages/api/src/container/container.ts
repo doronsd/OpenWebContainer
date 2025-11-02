@@ -99,8 +99,13 @@ export class ContainerManager {
                 }
                 break;
             case 'onServerListen':
+                console.log('[Container] Received onServerListen message for port', message.payload.port);
                 if(this.options.onServerListen){
+                    console.log('[Container] Calling onServerListen callback');
                     this.options.onServerListen(message.payload.port)
+                    console.log('[Container] onServerListen callback completed');
+                } else {
+                    console.log('[Container] No onServerListen callback registered');
                 }
                 break;
             case 'onServerClose':
@@ -347,6 +352,8 @@ export class ContainerManager {
         const id = crypto.randomUUID();
 
         try {
+            console.log('[Container] handleHttpRequest called', { method: request.method, url: request.url, port });
+            
             // Convert headers to plain object
             const headers: Record<string, string> = request.headers||{};
 
@@ -356,6 +363,7 @@ export class ContainerManager {
                 body = await request.body;
             }
 
+            console.log('[Container] sending httpRequest message to worker');
             const response = await this.worker.sendMessage({
                 type: 'httpRequest',
                 payload: {
@@ -372,19 +380,25 @@ export class ContainerManager {
                 }
             });
 
+            console.log('[Container] received response from worker', { type: response.type });
+
             if (response.type === 'networkError') {
+                console.error('[Container] networkError:', response.payload.response.error);
                 throw new Error(response.payload.response.error);
             }
             if (response.type === 'httpResponse') {
                 let resData=response.payload.response;
+                console.log('[Container] HTTP response received', { status: resData.status, bodyLength: resData.body?.length });
                 return new Response(resData.body, {
                     status: resData.status,
                     statusText: resData.statusText,
                     headers: resData.headers
                 });
             }
+            console.error('[Container] Invalid response type:', response.type);
             throw new Error(`Invalid response type: ${response.type}`);
         } catch (error: any) {
+            console.error('[Container] HTTP request failed:', error.message, error);
             throw new Error(`HTTP request failed: ${error.message}`);
         }
     }

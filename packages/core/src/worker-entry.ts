@@ -16,10 +16,13 @@ self.onmessage = async function (e: MessageEvent<WorkerMessage>) {
             // Initialize container when worker starts
             container = new OpenWebContainer({ debug: payload.debug,
                 onServerListen:(port)=>{
-                    sendWorkerResponse({ type: 'onServerListen', id, payload:{port} });
+                    console.log('[worker-entry] onServerListen callback invoked for port', port);
+                    sendWorkerResponse({ type: 'onServerListen', payload:{port} } as any);
+                    console.log('[worker-entry] onServerListen message sent');
                 },
                 onServerClose:(port)=>{
-                    sendWorkerResponse({ type: 'onServerClose', id, payload:{port} });
+                    console.log('[worker-entry] onServerClose callback invoked for port', port);
+                    sendWorkerResponse({ type: 'onServerClose', payload:{port} } as any);
                 }
              });
             // Send back confirmation
@@ -267,9 +270,12 @@ self.onmessage = async function (e: MessageEvent<WorkerMessage>) {
             }
         break;
         case 'httpRequest':
+            console.log('[worker-entry] httpRequest received', { id });
             const { request, port } = e.data.payload;
             const { id:reqId,method, url, headers, body,path } = request;
+            console.log('[worker-entry] request details', { reqId, method, url, port });
             try {
+                console.log('[worker-entry] calling container.handleHttpRequest');
                 const response = await container.handleHttpRequest({
                     hostname:'localhost',
                     port,
@@ -279,6 +285,7 @@ self.onmessage = async function (e: MessageEvent<WorkerMessage>) {
                     headers,
                     body,
                 },port);
+                console.log('[worker-entry] got response from container', { status: response.status });
                 sendWorkerResponse({
                     type: 'httpResponse',
                     id,
@@ -293,8 +300,10 @@ self.onmessage = async function (e: MessageEvent<WorkerMessage>) {
                         port
                     }
                 });
+                console.log('[worker-entry] httpResponse sent back');
             }
             catch (error: any) {
+                console.error('[worker-entry] httpRequest error:', error.message, error);
                 sendWorkerResponse({
                     type: 'networkError',
                     id,
